@@ -259,8 +259,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif text == "📂 Папки и чаты для рассылок":
         await update.message.reply_text(
-            f"📂 <b>Папки и чаты для рассылок:</b>\n\n{data['folders_message']}",
-            parse_mode="HTML",
+            f"📂 Папки и чаты для рассылок:\n\n{data['folders_message']}",
             reply_markup=get_keyboard(uid, data)
         )
 
@@ -316,13 +315,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         context.user_data["waiting_for"] = "folders_message"
         await update.message.reply_text(
-            "🗂 Отправьте новый текст для папок и чатов.\n\n"
-            "<b>Форматирование (HTML-теги):</b>\n"
-            "<code>&lt;b&gt;жирный&lt;/b&gt;</code>\n"
-            "<code>&lt;i&gt;курсив&lt;/i&gt;</code>\n"
-            "<code>&lt;a href='https://...'&gt;ссылка&lt;/a&gt;</code>\n\n"
-            "Для отмены — /cancel",
-            parse_mode="HTML"
+            "🗂 Отправьте новый список папок и чатов.\n\n"
+            "Для отмены — /cancel"
         )
 
     # ── Управление пользователями ───────────────────────────────
