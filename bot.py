@@ -24,8 +24,7 @@ def load_data() -> dict:
         "users": [8531243207, 8422967271, 791428991, 7201046344, 6359224120, 599952947],
         "broadcast_message": "✏️ Сообщение ещё не загружено.",
         "broadcast_photo": None,
-        "folders_message": "📁 Папки и чаты ещё не добавлены.",
-        "folders_photo": None
+        "folders_message": "📁 Папки и чаты ещё не добавлены."
     }
 
 def save_data(data: dict):
@@ -36,13 +35,15 @@ def init_data():
     if not os.path.exists(DATA_FILE):
         save_data(load_data())
     else:
-        # Добавить новые поля если их нет (миграция)
         data = load_data()
         changed = False
-        for key, default in [("broadcast_photo", None), ("folders_photo", None)]:
-            if key not in data:
-                data[key] = default
-                changed = True
+        if "broadcast_photo" not in data:
+            data["broadcast_photo"] = None
+            changed = True
+        # Убираем folders_photo если вдруг есть от старой версии
+        if "folders_photo" in data:
+            del data["folders_photo"]
+            changed = True
         if changed:
             save_data(data)
 
@@ -74,10 +75,9 @@ def get_keyboard(uid: int, data: dict):
     return ReplyKeyboardMarkup(base, resize_keyboard=True)
 
 # ─────────────────────────────────────────
-#  ОТПРАВКА МАТЕРИАЛА (текст + фото)
+#  ОТПРАВКА СООБЩЕНИЯ ДЛЯ РАССЫЛКИ (с фото или без)
 # ─────────────────────────────────────────
-async def send_material(update: Update, text: str, photo_id: str | None, keyboard):
-    """Отправляет материал — с фото или без, сохраняя форматирование."""
+async def send_broadcast(update: Update, text: str, photo_id, keyboard):
     if photo_id:
         await update.message.reply_photo(
             photo=photo_id,
@@ -123,7 +123,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ─────────────────────────────────────────
-#  ОБРАБОТКА ФОТО (при загрузке материала)
+#  ОБРАБОТКА ФОТО (только для сообщения рассылки)
 # ─────────────────────────────────────────
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
@@ -134,39 +134,26 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     waiting = context.user_data.get("waiting_for")
 
-    if waiting not in ("broadcast_photo", "folders_photo"):
+    if waiting != "broadcast_photo":
         await update.message.reply_text(
-            "Фото принято только в режиме обновления материала. Используйте кнопки меню 👇",
+            "Фото принимается только при обновлении сообщения для рассылки.",
             reply_markup=get_keyboard(uid, data)
         )
         return
 
-    # Берём file_id самого большого размера фото
     photo_id = update.message.photo[-1].file_id
     caption = update.message.caption or ""
 
-    if waiting == "broadcast_photo":
-        # Если есть подпись — сохраняем и текст и фото
-        if caption:
-            data["broadcast_message"] = caption
-        data["broadcast_photo"] = photo_id
-        save_data(data)
-        context.user_data.clear()
-        await update.message.reply_text(
-            "✅ Фото (и текст) для сообщения рассылки обновлены!",
-            reply_markup=get_keyboard(uid, data)
-        )
+    data["broadcast_photo"] = photo_id
+    if caption:
+        data["broadcast_message"] = caption
+    save_data(data)
+    context.user_data.clear()
 
-    elif waiting == "folders_photo":
-        if caption:
-            data["folders_message"] = caption
-        data["folders_photo"] = photo_id
-        save_data(data)
-        context.user_data.clear()
-        await update.message.reply_text(
-            "✅ Фото (и текст) для папок и чатов обновлены!",
-            reply_markup=get_keyboard(uid, data)
-        )
+    await update.message.reply_text(
+        "✅ Фото обновлено!" + (" Текст тоже обновлён из подписи." if caption else ""),
+        reply_markup=get_keyboard(uid, data)
+    )
 
 # ─────────────────────────────────────────
 #  ГЛАВНЫЙ ОБРАБОТЧИК ТЕКСТА
@@ -182,9 +169,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     waiting = context.user_data.get("waiting_for")
 
-    # ── Ожидание текста для материалов ─────────────────────────
+    # ── Ожидание ввода ──────────────────────────────────────────
     if waiting == "broadcast_message":
-        # Сохраняем текст как есть (HTML-entities уже в тексте от пользователя)
         data["broadcast_message"] = text
         save_data(data)
         context.user_data.clear()
@@ -192,9 +178,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if waiting == "broadcast_photo":
-        # Пользователь прислал текст вместо фото — предлагаем варианты
         await update.message.reply_text(
-            "Пришлите фото 📷 (можно с подписью).\n\nЕсли хотите убрать фото и оставить только текст — /remove_broadcast_photo\n\nДля отмены — /cancel"
+            "📷 Пришлите фото (можно с подписью — тогда обновится и текст).\n\n"
+            "Чтобы убрать фото — /remove_photo\n"
+            "Для отмены — /cancel"
         )
         return
 
@@ -202,16 +189,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data["folders_message"] = text
         save_data(data)
         context.user_data.clear()
-        await update.message.reply_text("✅ Текст папок и чатов обновлён!", reply_markup=get_keyboard(uid, data))
+        await update.message.reply_text("✅ Папки и чаты обновлены!", reply_markup=get_keyboard(uid, data))
         return
 
-    if waiting == "folders_photo":
-        await update.message.reply_text(
-            "Пришлите фото 📷 (можно с подписью).\n\nЕсли хотите убрать фото — /remove_folders_photo\n\nДля отмены — /cancel"
-        )
-        return
-
-    # ── Ожидание ID для управления пользователями ───────────────
     if waiting == "add_content_admin":
         try:
             new_id = int(text.strip())
@@ -221,7 +201,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     data["users"].append(new_id)
                 save_data(data)
                 await update.message.reply_text(
-                    f"✅ <code>{new_id}</code> добавлен как <b>контент-администратор</b>.\nМожет обновлять материалы и пользоваться ботом.",
+                    f"✅ <code>{new_id}</code> добавлен как <b>контент-администратор</b>.",
                     parse_mode="HTML", reply_markup=get_keyboard(uid, data))
             else:
                 await update.message.reply_text("ℹ️ Уже является контент-администратором.", reply_markup=get_keyboard(uid, data))
@@ -237,7 +217,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 data["users"].append(new_id)
                 save_data(data)
                 await update.message.reply_text(
-                    f"✅ <code>{new_id}</code> добавлен как <b>пользователь</b>.\nМожет просматривать материалы бота.",
+                    f"✅ <code>{new_id}</code> добавлен как <b>пользователь</b>.",
                     parse_mode="HTML", reply_markup=get_keyboard(uid, data))
             else:
                 await update.message.reply_text("ℹ️ Уже есть в списке.", reply_markup=get_keyboard(uid, data))
@@ -270,7 +250,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Просмотр материалов ─────────────────────────────────────
     if text == "📢 Актуальное сообщение для рассылки":
-        await send_material(
+        await send_broadcast(
             update,
             data["broadcast_message"],
             data.get("broadcast_photo"),
@@ -278,14 +258,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif text == "📂 Папки и чаты для рассылок":
-        await send_material(
-            update,
-            data["folders_message"],
-            data.get("folders_photo"),
-            get_keyboard(uid, data)
+        await update.message.reply_text(
+            f"📂 <b>Папки и чаты для рассылок:</b>\n\n{data['folders_message']}",
+            parse_mode="HTML",
+            reply_markup=get_keyboard(uid, data)
         )
 
-    # ── Редактирование материалов ───────────────────────────────
+    # ── Редактирование сообщения рассылки ───────────────────────
     elif text == "✏️ Обновить сообщение для рассылки":
         if not can_edit_content(uid, data):
             await update.message.reply_text("⛔️ Нет прав.", reply_markup=get_keyboard(uid, data))
@@ -302,47 +281,48 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=update_kb
         )
 
-    elif text == "🗂 Обновить папки и чаты":
+    elif text == "📝 Обновить только текст":
         if not can_edit_content(uid, data):
             await update.message.reply_text("⛔️ Нет прав.", reply_markup=get_keyboard(uid, data))
             return
-
-        update_kb = ReplyKeyboardMarkup([
-            [KeyboardButton("📝 Обновить только текст")],
-            [KeyboardButton("🖼 Обновить только фото")],
-            [KeyboardButton("🔙 Назад")],
-        ], resize_keyboard=True)
-        context.user_data["edit_target"] = "folders"
+        context.user_data["waiting_for"] = "broadcast_message"
         await update.message.reply_text(
-            "Что хотите обновить в папках и чатах?",
-            reply_markup=update_kb
-        )
-
-    # ── Подменю редактирования ──────────────────────────────────
-    elif text == "📝 Обновить только текст":
-        target = context.user_data.get("edit_target")
-        if not target or not can_edit_content(uid, data):
-            await update.message.reply_text("⛔️ Нет прав.", reply_markup=get_keyboard(uid, data))
-            return
-        context.user_data["waiting_for"] = f"{target}_message"
-        await update.message.reply_text(
-            "✏️ Отправьте новый текст.\n\n"
-            "<b>Поддерживается HTML-форматирование:</b>\n"
+            "✏️ Отправьте новый текст сообщения.\n\n"
+            "<b>Форматирование (HTML-теги):</b>\n"
             "<code>&lt;b&gt;жирный&lt;/b&gt;</code>\n"
             "<code>&lt;i&gt;курсив&lt;/i&gt;</code>\n"
-            "<code>&lt;a href='ссылка'&gt;текст&lt;/a&gt;</code>\n\n"
+            "<code>&lt;u&gt;подчёркнутый&lt;/u&gt;</code>\n"
+            "<code>&lt;a href='https://...'&gt;ссылка&lt;/a&gt;</code>\n\n"
             "Для отмены — /cancel",
             parse_mode="HTML"
         )
 
     elif text == "🖼 Обновить только фото":
-        target = context.user_data.get("edit_target")
-        if not target or not can_edit_content(uid, data):
+        if not can_edit_content(uid, data):
             await update.message.reply_text("⛔️ Нет прав.", reply_markup=get_keyboard(uid, data))
             return
-        context.user_data["waiting_for"] = f"{target}_photo"
+        context.user_data["waiting_for"] = "broadcast_photo"
         await update.message.reply_text(
-            "🖼 Пришлите фото.\n\nМожно добавить подпись к фото — тогда текст тоже обновится.\n\nДля отмены — /cancel"
+            "🖼 Пришлите фото.\n\n"
+            "Можно добавить подпись — тогда обновится и текст тоже.\n\n"
+            "Чтобы убрать фото — /remove_photo\n"
+            "Для отмены — /cancel"
+        )
+
+    # ── Редактирование папок и чатов (только текст) ─────────────
+    elif text == "🗂 Обновить папки и чаты":
+        if not can_edit_content(uid, data):
+            await update.message.reply_text("⛔️ Нет прав.", reply_markup=get_keyboard(uid, data))
+            return
+        context.user_data["waiting_for"] = "folders_message"
+        await update.message.reply_text(
+            "🗂 Отправьте новый текст для папок и чатов.\n\n"
+            "<b>Форматирование (HTML-теги):</b>\n"
+            "<code>&lt;b&gt;жирный&lt;/b&gt;</code>\n"
+            "<code>&lt;i&gt;курсив&lt;/i&gt;</code>\n"
+            "<code>&lt;a href='https://...'&gt;ссылка&lt;/a&gt;</code>\n\n"
+            "Для отмены — /cancel",
+            parse_mode="HTML"
         )
 
     # ── Управление пользователями ───────────────────────────────
@@ -405,9 +385,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ─────────────────────────────────────────
-#  КОМАНДЫ УДАЛЕНИЯ ФОТО
+#  ВСПОМОГАТЕЛЬНЫЕ КОМАНДЫ
 # ─────────────────────────────────────────
-async def remove_broadcast_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def remove_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
     uid = update.effective_user.id
     if not can_edit_content(uid, data):
@@ -416,16 +396,6 @@ async def remove_broadcast_photo(update: Update, context: ContextTypes.DEFAULT_T
     save_data(data)
     context.user_data.clear()
     await update.message.reply_text("✅ Фото из сообщения для рассылки удалено.", reply_markup=get_keyboard(uid, data))
-
-async def remove_folders_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = load_data()
-    uid = update.effective_user.id
-    if not can_edit_content(uid, data):
-        return
-    data["folders_photo"] = None
-    save_data(data)
-    context.user_data.clear()
-    await update.message.reply_text("✅ Фото из папок и чатов удалено.", reply_markup=get_keyboard(uid, data))
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
@@ -446,8 +416,7 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("cancel", cancel))
-    app.add_handler(CommandHandler("remove_broadcast_photo", remove_broadcast_photo))
-    app.add_handler(CommandHandler("remove_folders_photo", remove_folders_photo))
+    app.add_handler(CommandHandler("remove_photo", remove_photo))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print("🤖 Бот запущен.")
